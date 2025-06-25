@@ -10,19 +10,24 @@ networks:
 volumes:
   selenium-videos:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${PWD}/src/test/resources/videos
 
 services:
   # ===== SELENIUM HUB =====
   selenium-hub:
     image: selenium/hub:4.20.0-20240425
     ports:
-      - "4444:4444"
-      - "4442:4442"
-      - "4443:4443"
+      - target: 4444
+        published: 4444
+        protocol: tcp
+        mode: ingress
+      - target: 4442
+        published: 4442
+        protocol: tcp
+        mode: ingress
+      - target: 4443
+        published: 4443
+        protocol: tcp
+        mode: ingress
     environment:
       - SE_GRID_MAX_SESSION=4
       - SE_GRID_SESSION_TIMEOUT=300
@@ -31,8 +36,8 @@ services:
       - SE_SESSION_REQUEST_TIMEOUT=300
       - SE_SESSION_RETRY_INTERVAL=5
       - SE_ENABLE_TRACING=false
-      - SE_OPTS=--log-level INFO --session-timeout 300 --session-request-timeout 300
-      - JAVA_OPTS=-Xmx1g -XX:+UseContainerSupport
+      - SE_OPTS=--log-level INFO
+      - JAVA_OPTS=-Xmx512m
     networks:
       - selenium-grid
     deploy:
@@ -40,7 +45,7 @@ services:
       restart_policy:
         condition: on-failure
         delay: 10s
-        max_attempts: 3
+        max_attempts: 5
       placement:
         constraints:
           - node.role == manager
@@ -51,21 +56,23 @@ services:
           memory: 512m
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4444/wd/hub/status"]
-      interval: 30s
+      interval: 15s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 30s
 
-  # ===== CHROME NODE WITH VIDEO RECORDING =====
+  # ===== CHROME NODE =====
   chrome-node:
     image: selenium/node-chrome:4.20.0-20240425
     ports:
-      - "7900:7900"  # VNC port
+      - target: 7900
+        published: 7900
+        protocol: tcp
+        mode: ingress
     environment:
       - SE_EVENT_BUS_HOST=selenium-hub
       - SE_EVENT_BUS_PUBLISH_PORT=4442
       - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
-      - SE_NODE_HOST={{.Node.Hostname}}-chrome
       - SE_NODE_MAX_INSTANCES=1
       - SE_NODE_MAX_SESSIONS=1
       - SE_NODE_SESSION_TIMEOUT=300
@@ -81,15 +88,14 @@ services:
       - SE_VIDEO_UPLOAD_ON_FAILING=true
       - SE_VIDEO_FOLDER=/videos
       - SE_VIDEO_FILE_NAME=auto
-      - SE_VIDEO_CODEC=libx264
-      - SE_VIDEO_PRESET=ultrafast
-      - SE_VIDEO_FRAMERATE=15
-      # Chrome options for stability
-      - SE_NODE_OVERRIDE_MAX_SESSIONS=true
-      - JAVA_OPTS=-Xmx1g -XX:+UseContainerSupport
+      - JAVA_OPTS=-Xmx1g
     volumes:
-      - selenium-videos:/videos
-      - /dev/shm:/dev/shm
+      - type: volume
+        source: selenium-videos
+        target: /videos
+      - type: bind
+        source: /dev/shm
+        target: /dev/shm
     networks:
       - selenium-grid
     depends_on:
@@ -98,8 +104,8 @@ services:
       replicas: 1
       restart_policy:
         condition: on-failure
-        delay: 10s
-        max_attempts: 3
+        delay: 15s
+        max_attempts: 5
       resources:
         limits:
           memory: 2g
@@ -114,13 +120,18 @@ services:
       retries: 3
       start_period: 60s
 
-  # ===== FILE BROWSER FOR VIDEO ACCESS =====
+  # ===== FILE BROWSER =====
   file-browser:
     image: filebrowser/filebrowser:v2.27.0
     ports:
-      - "8081:80"
+      - target: 80
+        published: 8081
+        protocol: tcp
+        mode: ingress
     volumes:
-      - selenium-videos:/srv
+      - type: volume
+        source: selenium-videos
+        target: /srv
     environment:
       - FB_NOAUTH=true
       - FB_ROOT=/srv
@@ -147,7 +158,7 @@ services:
       timeout: 10s
       retries: 3
 
-  # ===== STANDALONE VIDEO RECORDER (FALLBACK) =====
+  # ===== VIDEO RECORDER =====
   video-recorder:
     image: selenium/video:ffmpeg-7.1-20250606
     environment:
@@ -161,7 +172,9 @@ services:
       - SE_VIDEO_FRAMERATE=15
       - SE_VIDEO_SIZE=1920x1080
     volumes:
-      - selenium-videos:/videos
+      - type: volume
+        source: selenium-videos
+        target: /videos
     networks:
       - selenium-grid
     depends_on:
@@ -177,34 +190,3 @@ services:
           memory: 512m
         reservations:
           memory: 256m
-
-  # ===== NGINX REVERSE PROXY (OPTIONAL) =====
-  nginx-proxy:
-    image: nginx:1.25-alpine
-    ports:
-      - "8080:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-    networks:
-      - selenium-grid
-    depends_on:
-      - selenium-hub
-      - file-browser
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-      resources:
-        limits:
-          memory: 128m
-        reservations:
-          memory: 64m
-
-# ===== SWARM DEPLOYMENT CONFIGURATION =====
-configs:
-  nginx_config:
-    external: true
-
-secrets:
-  selenium_credentials:
-    external: true
